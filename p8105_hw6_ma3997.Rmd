@@ -8,6 +8,7 @@ library(modelr)
 library(p8105.datasets)
 library(rvest)
 library(ggplot2)
+library(modelr)
 
 knitr::opts_chunk$set(
   fig.width = 6,
@@ -28,7 +29,7 @@ scale_fill_discrete = scale_fill_viridis_d
 
 ```
 
-Hello! And welcome to my solutions for Homework 5. Enjoy.
+Hello! And welcome to my solutions for Homework 6. Enjoy.
 
 ## Problem 1
 
@@ -47,10 +48,12 @@ homicide_df =
     )
   ) %>% 
   filter(
+    victim_race %in% c("White", "Black"),
     city_state != "Tulsa_AL",
-    victim_race %in% c("White", "Black")
+    city_state != "Tulsa, AL"
     ) %>% 
-  select(city_state, resolution, victim_age, victim_race, victim_sex)
+  select(city_state, resolution, victim_age, victim_race, victim_sex) %>% 
+  view
 
 ```
 
@@ -72,5 +75,139 @@ glm(resolution ~ victim_age + victim_race + victim_sex,
   ) %>% 
   select(term, OR, starts_with("CI")) %>% 
   knitr::kable(digits = 3)
+```
+
+Try this across cities.
+
+```{r}
+model_results_df = 
+  homicide_df %>% 
+  nest(data = -city_state) %>% 
+  mutate(
+    models = map(.x = data, ~glm(resolution ~ victim_age + victim_race + victim_sex, data = .x, family = binomial())),
+    results = map(models, broom::tidy)
+  ) %>% 
+  select(city_state, results) %>% 
+  unnest(results)%>% 
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96 * std.error),
+    CI_upper = exp(estimate + 1.96 * std.error)
+  ) %>% 
+  select(city_state, term, OR, starts_with("CI"))
+
+```
+
+```{r}
+model_results_df %>% 
+  filter(term == "victim_sexMale") %>% 
+  mutate(city_state = fct_reorder(city_state, OR)) %>% 
+  ggplot(aes(x = city_state, y = OR))+
+  geom_point() +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper))+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+## Problem 2 notes
+
+Firstly, have to do cross validation for two models. So, start with making the simple models and make sure its possible to do cross validation. Pull cross validation code from that lecture. 
+
+Spend time on model building. Start picking variables that may be interesting and see if they would be significant. Look at residuals to see if any patterns. Issues with the dataset? 
+
+```{r, Example of finding residuals}
+baby_df = read_csv("./data/birthweight_data/birthweight.csv") %>% 
+  mutate(
+    babysex = as.factor(babysex), 
+    frace = as.factor(frace),
+    malform = as.factor(malform),
+    mrace = as.factor(mrace)
+  )
+
+model_1 = lm(bwt ~ momage * delwt, data = baby_df)
+
+baby_df %>% 
+  add_predictions(model_1) %>%
+  add_residuals(model_1) %>% 
+  ggplot(aes(x = resid, y = pred))+
+  geom_point()+
+  labs(title = "Plot of model residuals against fitted values")
+
+```
+
+```{r}
+
+model_2 = lm(bwt ~ gaweeks, data = baby_df)
+model_3 = lm(bwt ~ bhead * blength * babysex, data = baby_df)
+
+cv_df = crossv_mc(baby_df, 100)
+
+cv_df = 
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+
+cv_df = 
+  cv_df %>% 
+  mutate(
+    model_1 = map(.x = train, ~lm(bwt ~ momage * delwt, data = .x)),
+    model_2 = map(.x = train, ~lm(bwt ~ gaweeks, data = .x)),
+    model_3 = map(.x = train, ~lm(bwt ~ bhead * blength * babysex, data = .x))
+  ) %>% 
+  mutate(
+    rmse_1 = map2_dbl(.x = model_1, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(.x = model_2, .y = test, ~rmse(model = .x, data = .y)),
+    rmse_3 = map2_dbl(.x = model_3, .y = test, ~rmse(model = .x, data = .y))
+  )
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(), 
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) %>% 
+  ggplot(aes(x = model, y = rmse))+
+  geom_violin()
+
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(), 
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) %>% 
+  group_by(model) %>% 
+  summarize(avg_rsme = mean(rmse))
+```
+
+
+
+Residuals are not heavily skewed, they have some range. 
+
+Does it look like there is skewness? Are there outlying values? Any trends?
+
+## Problem 3 notes
+
+Download the dataset, fit model to dataset, compute the adjusted r squared comign straight out broom glance. 
+
+Getting the betas will be via broom tidy, get estimated coefficients, rearrange thigns to have intercept and slope next to each other that you can multiple and take the log of 
+
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
 ```
 
